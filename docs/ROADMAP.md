@@ -1,10 +1,10 @@
 # PRODUCT & TECHNICAL ROADMAP
 ## Sports Intelligence Platform — Fútbol Predictivo
 
-**Versión:** 1.0.0  
-**Fecha:** 2026-06-12  
-**Horizonte:** 18 meses  
-**Estado:** Diseño Pre-Implementación
+**Versión:** 1.1.0 _(revisado por comité de arquitectura 2026-06-12)_
+**Fecha:** 2026-06-12
+**Horizonte:** 18 meses
+**Estado:** Diseño Pre-Implementación — Aprobado
 
 ---
 
@@ -40,6 +40,7 @@ FASE 2 CLOUD ──────────────────────�
   Migración FE:                                            [██████████████]
   Deploy Backend:                                                [█████████]
   DB Managed:                                                    [████████]
+  Celery+Redis:                                                  [████████]
   Stripe:                                                              [██]
 
 FASE 3 SCALE ──────────────────────────────────────────────────────────────
@@ -57,8 +58,8 @@ Sistema completamente funcional en local que valide la propuesta de valor antes 
 
 | Hito | Semana | Descripción |
 |------|--------|-------------|
-| M1.1 | 2 | Entorno Docker funcional + Schema BD creado |
-| M1.2 | 4 | ETL sincronizando ligas y equipos automáticamente |
+| M1.1 | 2 | Docker (2 contenedores) funcional + schema BD creado + APScheduler integrado |
+| M1.2 | 4 | ETL sincronizando ligas, equipos y standings automáticamente |
 | M1.3 | 6 | Predicciones Poisson generadas para próximos partidos de La Liga |
 | M1.4 | 8 | API REST completa con autenticación JWT |
 | M1.5 | 10 | Dashboard Jinja2 usable (Home + Equipos + Partidos) |
@@ -66,20 +67,20 @@ Sistema completamente funcional en local que valide la propuesta de valor antes 
 
 ### Entregables Fase 1
 
-- [ ] Sistema corriendo con `docker compose up`
+- [ ] Sistema corriendo con `docker compose up` (solo 2 contenedores)
 - [ ] 2 ligas con datos completos (La Liga + Premier League)
-- [ ] Dashboard web funcional (Jinja2)
-- [ ] API REST documentada en OpenAPI
+- [ ] Dashboard web funcional (Jinja2 SSR)
+- [ ] API REST documentada en OpenAPI (`/docs`)
 - [ ] Modelo Poisson con Brier Score < 0.26
-- [ ] Tests con cobertura > 80% en módulos core
-- [ ] `README.md` con instrucciones completas de setup
+- [ ] Tests con cobertura > 80% en `services/` y `ml/`
+- [ ] `README.md` con setup completo en < 15 minutos
 
 ### KPIs de Éxito Fase 1
 
 | Métrica | Meta |
 |---------|------|
 | Ligas activas | 2 |
-| Equipes en BD | > 40 |
+| Equipos en BD | > 40 |
 | Partidos históricos | > 500 |
 | Predicciones generadas | > 100 |
 | Accuracy modelo 1X2 (histórico) | > 46% |
@@ -94,18 +95,26 @@ Migrar a infraestructura cloud, lanzar primeros usuarios reales, activar monetiz
 
 ### 4.1 Bloque A — Deploy Cloud (Semanas 13-16)
 
-**Sprint 7-8: Backend a Cloud + DB Managed**
+**Sprint 7-8: Backend a Cloud + DB Managed + Workers distribuidos**
 
 | Tarea | Descripción |
 |-------|-------------|
 | Seleccionar provider backend | Railway vs Fly.io: evaluar pricing, DX, regiones |
 | Migrar variables de entorno | Usar secrets manager del provider |
-| Setup PostgreSQL managed | Neon (serverless) o Supabase |
-| Setup Redis managed | Upstash (serverless, pay-per-use) |
-| Configurar CI/CD | GitHub Actions: test → build → deploy on push to main |
+| Setup PostgreSQL managed | Neon (serverless + branching) o Supabase |
+| **Migrar APScheduler → Celery + Redis** | Agregar Upstash Redis; migrar jobs ETL a Celery tasks; agregar Celery Beat como servicio separado |
+| Configurar CI/CD | GitHub Actions: test → build → deploy on push a `main` |
 | Setup Sentry | Error tracking y performance monitoring |
-| Configurar backups BD | Snapshot diario automático |
-| Configurar dominio y SSL | api.sip.com → HTTPS obligatorio |
+| Configurar backups BD | Snapshot diario automático del provider |
+| Configurar dominio y SSL | `api.sip.com` → HTTPS obligatorio |
+
+**Migración APScheduler → Celery (detalle):**
+```
+Fase 1: APScheduler (in-process) → un proceso, suficiente para MVP local
+Fase 2: Celery + Celery Beat       → workers distribuidos, reintentos durables,
+                                     monitoreo con Flower, escalable en cloud
+Effort estimado: 1 sprint de trabajo (~40h)
+```
 
 **Hito M2.1 (Semana 16):** Backend funcional en cloud, accesible en URL pública
 
@@ -119,9 +128,9 @@ Migrar a infraestructura cloud, lanzar primeros usuarios reales, activar monetiz
 |-------|--------|-------------|
 | Scaffolding Next.js 15 (App Router) | 15 | Setup básico, estructura de carpetas |
 | Design System con Shadcn/UI + Tailwind | 15-16 | Tokens de diseño, componentes base |
-| Autenticación con NextAuth o custom JWT | 16 | Sesión persistida en cookie httpOnly |
-| Configurar CORS en FastAPI | 16 | Whitelist de dominios |
-| Migrar página Home/Dashboard | 17 | Partidos del día + predicciones |
+| Autenticación con custom JWT | 16 | Sesión persistida en cookie httpOnly, fetch wrapper |
+| Configurar CORS en FastAPI | 16 | `CORSMiddleware` con whitelist del dominio Netlify |
+| Migrar página Home/Dashboard | 17 | Partidos del día + predicciones (SSG + ISR) |
 | Migrar página Leagues | 17 | Tabla de posiciones |
 | Migrar página Teams | 18 | Perfil + stats + últimos partidos |
 | Migrar página Matches | 18 | Detalle + predicciones |
@@ -129,6 +138,8 @@ Migrar a infraestructura cloud, lanzar primeros usuarios reales, activar monetiz
 | Deploy en Netlify | 19 | CI/CD con GitHub, edge network |
 | A/B: apuntar 10% tráfico a Next.js | 20 | Feature flag por dominio |
 | Migración completa, deprecar Jinja2 | 20 | Go-live completo |
+
+> **Por qué esta migración es fácil:** La API REST del MVP fue diseñada como contrato independiente desde el Sprint 4. El único cambio en backend es agregar `CORSMiddleware`. Jinja2 y Next.js son consumidores intercambiables de la misma API.
 
 **Hito M2.2 (Semana 20):** Frontend Next.js en producción, Jinja2 deprecado
 
@@ -142,26 +153,26 @@ Migrar a infraestructura cloud, lanzar primeros usuarios reales, activar monetiz
 |---------|-------------|--------|
 | Planes de suscripción (Free/Pro) | Definir features por plan | 19 |
 | Integración Stripe | Webhooks, checkout session, portal de cliente | 20-21 |
-| Feature gates por plan | Restringir xG, features avanzadas, exportación | 21 |
+| Feature gates por plan | Restringir xG, features avanzadas | 21 |
+| Migración Alembic: campos OAuth + Stripe en `users` | `oauth_provider`, `stripe_customer_id`, `subscription_status` | 20 |
 | Email transaccional (SendGrid) | Bienvenida, renovación, recordatorios | 22 |
 | OAuth Google | Registro/login con Google | 22 |
 | Landing page de marketing | Pricing, features, testimonios | 23-24 |
-| Campaña de lanzamiento | SEO, redes sociales, comunidades fútbol | 24 |
 
-**Hito M2.3 (Semana 24):** Primeros 100 usuarios registrados, primeros 5 suscriptores Pro
+**Hito M2.3 (Semana 24):** Primeros 100 usuarios, primeros 5 suscriptores Pro
 
 ---
 
 ### 4.4 Bloque D — Expansión de Datos (Paralelo con B y C)
 
-| Feature | Semana | Descripción |
-|---------|--------|-------------|
-| Agregar Liga BetPlay Colombia | 17 | Alta demanda en mercado hispanohablante |
-| Agregar Champions League | 18 | Mayor visibilidad, partidos top |
-| Agregar Serie A + Bundesliga | 20 | Cobertura europea completa |
-| Estadísticas de jugadores más completas | 21 | API-Football plan pagado |
-| Datos históricos 5 temporadas | 22 | Retroalimentar modelo ML |
-| Odds en tiempo real (The Odds API) | 22 | Value bets para usuarios Pro |
+| Feature | Semana |
+|---------|--------|
+| Agregar Liga BetPlay Colombia | 17 |
+| Agregar Champions League | 18 |
+| Agregar Serie A + Bundesliga | 20 |
+| Estadísticas de jugadores más completas | 21 |
+| Datos históricos 5 temporadas | 22 |
+| Odds en tiempo real (The Odds API) | 22 |
 
 ### KPIs de Éxito Fase 2
 
@@ -170,7 +181,7 @@ Migrar a infraestructura cloud, lanzar primeros usuarios reales, activar monetiz
 | Usuarios registrados | 500 |
 | Usuarios activos semanales | 150 |
 | Suscriptores Pro | 20 |
-| MRR (Monthly Recurring Revenue) | $200 USD |
+| MRR | $200 USD |
 | Ligas activas | 6 |
 | Accuracy modelo 1X2 | > 50% |
 | Uptime (SLA) | > 99.5% |
@@ -180,19 +191,16 @@ Migrar a infraestructura cloud, lanzar primeros usuarios reales, activar monetiz
 
 ## 5. FASE 3 — ESCALA (Semanas 25-52)
 
-### Objetivo
-Convertir la plataforma en un producto maduro con ML avanzado, real-time data y primeras señales de product-market fit sólidas.
-
 ### 5.1 Mejoras de Modelo ML (Semanas 25-36)
 
-| Trimestre | Modelo | Features | Mejora Esperada |
+| Trimestre | Modelo | Features | Mejora esperada |
 |-----------|--------|----------|----------------|
 | Q3 2026 | Regresión Logística | 30 features: forma, H2H, lesiones, fatiga | +2-3% accuracy |
 | Q4 2026 | XGBoost/LightGBM | 60+ features: xG por partido, PPDA, formaciones | +3-5% accuracy |
-| Q1 2027 | Ensemble (Poisson + XGBoost) | Combinación calibrada de modelos | +1-2% accuracy |
-| Q2 2027 | LSTM (datos temporales) | Serie temporal de forma, momentum | +1-3% accuracy |
+| Q1 2027 | Ensemble | Combinación calibrada Poisson + XGBoost | +1-2% accuracy |
+| Q2 2027 | LSTM | Serie temporal de forma y momentum | +1-3% accuracy |
 
-**MLflow** para tracking de experimentos desde el inicio de Fase 3.
+MLflow para tracking de experimentos desde el inicio de Fase 3.
 
 ---
 
@@ -202,8 +210,7 @@ Convertir la plataforma en un producto maduro con ML avanzado, real-time data y 
 |---------|-------------|
 | WebSocket API | Actualizaciones de score y eventos durante partidos |
 | Predicciones en vivo | Recalcular probabilidades con cada gol/tarjeta |
-| Push notifications | App nativa o browser push |
-| Live match tracking | Posición y momentum visual |
+| Push notifications | Browser push para equipos favoritos |
 
 ---
 
@@ -217,7 +224,6 @@ Convertir la plataforma en un producto maduro con ML avanzado, real-time data y 
 | Dashboard personalizable | Pro | Widgets drag-and-drop |
 | Alertas configurables | Pro | Email/Push por threshold de valor bet |
 | White-label | Enterprise | Plataforma con branding del cliente |
-| Scouting reports | Enterprise | Análisis de jugadores para clubes |
 
 ---
 
@@ -228,9 +234,8 @@ Convertir la plataforma en un producto maduro con ML avanzado, real-time data y 
 | Separar ETL service | Escala independiente de la API | 30 |
 | Kafka para eventos | Desacoplar sincronización de resultados | 32 |
 | dbt para transformaciones SQL | Datos más limpios para ML | 30 |
-| Airflow para pipelines ML | Reemplazar Celery Beat para jobs complejos | 34 |
-| Read replica PostgreSQL | Descargar queries analíticos de la primaria | 28 |
-| Redis Cluster | Alta disponibilidad del cache | 32 |
+| Airflow (reemplaza Celery Beat) | Pipelines ML complejos con dependencias | 34 |
+| Read replica PostgreSQL | Descargar queries analíticos | 28 |
 | Elasticsearch | Búsqueda full-text de jugadores y equipos | 36 |
 | CDN para assets estáticos | Imágenes de escudos y jugadores | 26 |
 
@@ -251,28 +256,32 @@ Convertir la plataforma en un producto maduro con ML avanzado, real-time data y 
 ## 6. EVOLUCIÓN DE LA STACK TECNOLÓGICA
 
 ```
-COMPONENTE          FASE 1              FASE 2              FASE 3
-───────────────────────────────────────────────────────────────────────
-Frontend            Jinja2 (SSR)        Next.js + Netlify   Next.js + CDN
-Backend             FastAPI (local)     FastAPI (cloud)     FastAPI + microservicios
-Base de datos       PostgreSQL Docker   Neon/Supabase       Aurora PostgreSQL
-Cache               Redis Docker        Upstash             Redis Cluster
-Task Queue          Celery + Redis      Celery (cloud)      Celery + Airflow
-Scheduler           Celery Beat         Celery Beat         Apache Airflow
-ETL                 Celery tasks        Celery tasks        Servicio separado
-ML                  scipy/numpy local   scipy/numpy cloud   MLflow + LightGBM
-Monitoring          Logs básicos        Sentry + Grafana    DataDog/New Relic
-Storage             Disco local         Cloudflare R2       R2 + CDN
-Auth                JWT custom          JWT + Google OAuth  Auth0 (Fase 3)
-Emails              -                   SendGrid            SendGrid
-Pagos               -                   Stripe              Stripe
-CI/CD               Manual              GitHub Actions      GitHub Actions + ArgoCD
-Infra               Docker Compose      Docker + Railway    Kubernetes (EKS/GKE)
+COMPONENTE        FASE 1 (MVP Local)    FASE 2 (Cloud)         FASE 3 (Scale)
+─────────────────────────────────────────────────────────────────────────────
+Frontend          Jinja2 (SSR)          Next.js 15 + Netlify   Next.js + CDN
+Backend           FastAPI (local)        FastAPI (cloud)        FastAPI + microservicios
+Base de datos     PostgreSQL Docker      Neon PostgreSQL        Aurora PostgreSQL
+Scheduler/Queue   APScheduler           Celery + Redis          Celery + Airflow
+                  (in-process)          (workers distribuidos)
+Cache             —                      Upstash Redis           Redis Cluster
+ETL               APScheduler jobs       Celery tasks            Servicio separado
+ML                scipy/numpy           scipy/numpy cloud       MLflow + LightGBM
+Monitoring        Logs JSON + Sentry     Sentry + Grafana        DataDog/New Relic
+Storage           Disco local            Cloudflare R2           R2 + CDN
+Auth              JWT HS256              JWT RS256 + Google      Auth0 (evaluar)
+Emails            —                      SendGrid                SendGrid
+Pagos             —                      Stripe                  Stripe
+CI/CD             GitHub Actions         GitHub Actions          GitHub Actions + ArgoCD
+Infra             Docker Compose (2)     Docker + Railway        Kubernetes (EKS/GKE)
+Contenedores MVP  api + postgres         api + worker + beat +   múltiples
+                  (2 contenedores)       postgres + redis (5)
 ```
+
+**La transición más importante de Fase 1 → Fase 2 es APScheduler → Celery + Redis.** Es intencionalmente simple en MVP (in-process, sin contenedores extra) y se reemplaza en Fase 2 con workers distribuidos cuando el cloud lo requiere. Effort estimado: 1 sprint.
 
 ---
 
-## 7. DECISIONES DE ARQUITECTURA FUTURAS (Por Evaluar)
+## 7. DECISIONES DE ARQUITECTURA FUTURAS
 
 ### Decisión 1: Mobile App (Q4 2026)
 - **Opción A:** React Native (compartir lógica con Next.js)
@@ -285,20 +294,20 @@ Infra               Docker Compose      Docker + Railway    Kubernetes (EKS/GKE)
 - **Decisión:** Depende del número de clientes Enterprise y sus requisitos de aislamiento.
 
 ### Decisión 3: Datos Propios vs APIs Externas
-- Cuando supere 10,000 usuarios activos, evaluar scraping propio + partnerships con proveedores de datos
-- Costo de API-Football escala linealmente; en cierto punto, propio pipeline es más económico
+- Cuando supere 10,000 usuarios activos, evaluar scraping propio + partnerships
+- Costo de API-Football escala linealmente; en cierto punto, pipeline propio es más económico
 
 ---
 
-## 8. RIESGOS Y MITIGACIONES DE ROADMAP
+## 8. RIESGOS Y MITIGACIONES
 
 | Riesgo | Probabilidad | Impacto | Mitigación |
 |--------|-------------|---------|------------|
-| Bajo engagement en MVP → no validar | Media | Alto | Lanzar beta privada con 20 usuarios reales desde Semana 10 |
-| Costos cloud superan proyección | Baja | Medio | Budget alert en Railway/Neon; escalar verticalmente antes que horizontalmente |
-| Competidor lanza producto similar | Media | Medio | Diferenciación en explicabilidad del modelo y cobertura latinoamericana |
-| API-Football sube precios | Media | Alto | Diversificar fuentes de datos; football-data.org como fallback principal |
-| Dificultad para conseguir suscriptores Pro | Media | Alto | Ofrecer período de prueba Pro de 30 días; colectar testimonios desde beta |
+| Bajo engagement en MVP | Media | Alto | Beta privada con 20 usuarios desde Semana 10 |
+| Costos cloud superan proyección | Baja | Medio | Budget alert en Railway/Neon; escalar verticalmente primero |
+| Competidor lanza producto similar | Media | Medio | Diferenciación en explicabilidad y cobertura latinoamericana |
+| API-Football sube precios | Media | Alto | Diversificar fuentes; football-data.org como fallback |
+| Dificultad para conseguir Pro | Media | Alto | Trial Pro 30 días; colectar testimonios desde beta |
 
 ---
 
