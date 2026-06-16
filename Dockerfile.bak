@@ -23,7 +23,6 @@ WORKDIR /app
 COPY pyproject.toml ./
 # If uv.lock exists it will be used; otherwise uv resolves from pyproject.toml
 COPY uv.lock* ./
-COPY requirements.txt ./
 
 # ─── development ─────────────────────────────────────────────────────────────
 FROM base AS development
