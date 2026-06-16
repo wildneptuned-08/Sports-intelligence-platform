@@ -1,0 +1,78 @@
+version: "3.9"
+
+# ─── Sports Intelligence Platform — Docker Compose (Fase 1 MVP) ──────────────
+# 2 servicios: api + postgres
+# Sin Redis, sin Celery worker, sin beat (APScheduler in-process)
+
+services:
+
+  # ── FastAPI Application ────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      target: development          # use 'production' for prod build
+    container_name: sip_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app                     # hot-reload: mounts entire project
+    env_file:
+      - .env
+    environment:
+      # Override host for docker networking (postgres resolves to the container)
+      DATABASE_URL: postgresql+asyncpg://sip:sip_password@postgres:5432/sip_db
+      ENVIRONMENT: development
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - sip_network
+
+  # ── PostgreSQL 16 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: sip_postgres
+    ports:
+      - "5432:5432"                # exposed for local DB clients (TablePlus, etc.)
+    environment:
+      POSTGRES_USER: sip
+      POSTGRES_PASSWORD: sip_password
+      POSTGRES_DB: sip_db
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sip -d sip_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - sip_network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  sip_network:
+    driver: bridge
+
+# ─── Phase 2 additions (NOT in Fase 1) ───────────────────────────────────────
+# When migrating to cloud (Phase 2), add:
+#
+#   redis:
+#     image: redis:7-alpine
+#     ...
+#
+#   worker:
+#     build: { context: ., target: production }
+#     command: celery -A app.worker worker --loglevel=info
+#     depends_on: [api, redis, postgres]
+#
+#   beat:
+#     build: { context: ., target: production }
+#     command: celery -A app.worker beat --loglevel=info
+#     depends_on: [worker]
