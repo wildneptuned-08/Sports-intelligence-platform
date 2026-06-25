@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docker volumes (local data directory)
+data/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
