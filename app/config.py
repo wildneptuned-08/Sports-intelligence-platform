@@ -21,8 +21,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
 
-    # ── External APIs (Sprint 2+) ─────────────────────────────────────────────
+    # ── External APIs ─────────────────────────────────────────────────────────
     api_football_key: str = ""
+    api_football_base_url: str = "https://v3.football.api-sports.io"
     football_data_key: str = ""
     the_odds_api_key: str = ""
 

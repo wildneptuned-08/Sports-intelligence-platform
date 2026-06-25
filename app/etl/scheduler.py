@@ -4,70 +4,57 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from app.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 
 def create_scheduler() -> AsyncIOScheduler:
-    """
-    Create and configure the APScheduler instance.
-
-    Jobs are registered here. In the bootstrap (Sprint 1) no jobs are active yet.
-    Sprint 2+ will uncomment and implement each job below.
-    """
     scheduler = AsyncIOScheduler(timezone="UTC")
+    settings = get_settings()
 
-    # ── ETL Jobs (Sprint 2+) ──────────────────────────────────────────────────
-    # Uncomment when the job modules are implemented:
-    #
-    # from app.etl.jobs.sync_fixtures import sync_fixtures
-    # from app.etl.jobs.sync_results import sync_results
-    # from app.etl.jobs.sync_standings import sync_standings
-    # from app.etl.jobs.generate_predictions import generate_predictions
-    # from app.etl.jobs.cleanup import cleanup_old_tokens
-    # from app.config import get_settings
-    #
-    # settings = get_settings()
-    #
-    # scheduler.add_job(
-    #     sync_fixtures,
-    #     trigger="interval",
-    #     hours=settings.etl_sync_fixtures_interval_hours,
-    #     id="sync_fixtures",
-    #     replace_existing=True,
-    #     max_instances=1,
-    # )
-    # scheduler.add_job(
-    #     sync_results,
-    #     trigger="interval",
-    #     hours=settings.etl_sync_results_interval_hours,
-    #     id="sync_results",
-    #     replace_existing=True,
-    #     max_instances=1,
-    # )
-    # scheduler.add_job(
-    #     sync_standings,
-    #     trigger="cron",
-    #     hour=4,
-    #     minute=0,
-    #     id="sync_standings",
-    #     replace_existing=True,
-    # )
-    # scheduler.add_job(
-    #     generate_predictions,
-    #     trigger="cron",
-    #     hour=8,
-    #     minute=0,
-    #     id="generate_predictions",
-    #     replace_existing=True,
-    # )
-    # scheduler.add_job(
-    #     cleanup_old_tokens,
-    #     trigger="cron",
-    #     hour=3,
-    #     minute=0,
-    #     id="cleanup_tokens",
-    #     replace_existing=True,
-    # )
+    # ── ETL Jobs — registered but paused ─────────────────────────────────────
+    # Set API_FOOTBALL_KEY and flip is_active on leagues to enable.
+    # To activate: scheduler.resume_job("sync_competitions") etc.
 
-    logger.info("Scheduler configured — 0 jobs registered (ETL Sprint 2+)")
+    from app.etl.jobs.sync_competitions import sync_competitions
+    from app.etl.jobs.sync_teams import sync_teams
+    from app.etl.jobs.sync_matches import sync_matches
+
+    scheduler.add_job(
+        sync_competitions,
+        trigger="cron",
+        hour=2,
+        minute=0,
+        id="sync_competitions",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=None,
+    )
+
+    scheduler.add_job(
+        sync_teams,
+        trigger="cron",
+        hour=3,
+        minute=0,
+        id="sync_teams",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=None,
+    )
+
+    scheduler.add_job(
+        sync_matches,
+        trigger="interval",
+        hours=settings.etl_sync_fixtures_interval_hours,
+        id="sync_matches",
+        replace_existing=True,
+        max_instances=1,
+        next_run_time=None,
+    )
+
+    logger.info(
+        "Scheduler configured — 3 ETL jobs registered (paused)",
+        extra={"jobs": ["sync_competitions", "sync_teams", "sync_matches"]},
+    )
     return scheduler

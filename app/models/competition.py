@@ -42,7 +42,7 @@ class League(Base):
     __tablename__ = "leagues"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    external_id: Mapped[str | None] = mapped_column(String(50))
+    external_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     # Nullable: allows Champions League / UEFA (no single country)
@@ -75,7 +75,7 @@ class Season(Base):
     __tablename__ = "seasons"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     label: Mapped[str] = mapped_column(String(20), nullable=False)
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(

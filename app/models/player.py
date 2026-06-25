@@ -20,7 +20,7 @@ class Player(Base):
     __tablename__ = "players"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    external_id: Mapped[str | None] = mapped_column(String(50))
+    external_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     first_name: Mapped[str | None] = mapped_column(String(100))

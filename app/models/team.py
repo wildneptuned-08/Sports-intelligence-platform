@@ -21,7 +21,7 @@ class Venue(Base):
     __tablename__ = "venues"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    external_id: Mapped[str | None] = mapped_column(String(50))
+    external_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     city: Mapped[str | None] = mapped_column(String(100))
     country_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("countries.id"))
@@ -44,7 +44,7 @@ class Team(Base):
     __tablename__ = "teams"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    external_id: Mapped[str | None] = mapped_column(String(50))
+    external_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     short_name: Mapped[str | None] = mapped_column(String(50))
     slug: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
