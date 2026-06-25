@@ -1,151 +1,82 @@
 # API DESIGN
 ## Sports Intelligence Platform — Fútbol Predictivo
 
-**Versión:** 1.0.0  
-**Fecha:** 2026-06-12  
-**Especificación:** OpenAPI 3.0  
-**Base URL MVP:** `http://localhost:8000/api/v1`  
-**Base URL Prod:** `https://api.sip.com/v1`
+**Versión:** 1.1.0 _(revisado por comité de arquitectura 2026-06-12)_
+**Fecha:** 2026-06-12
+**Estado:** Diseño Pre-Implementación — Aprobado
 
 ---
 
-## 1. PRINCIPIOS DE DISEÑO DE LA API
+## 1. PRINCIPIOS DE DISEÑO
 
-### 1.1 Contratos Fundamentales
-
-- **REST** con convenciones HTTP estándar (verbos, códigos de estado, headers)
-- **Versionado en URL:** `/api/v1/`, `/api/v2/` (nunca por header en esta etapa)
-- **Plural en recursos:** `/teams`, `/matches`, `/predictions`
-- **Respuestas en JSON** con estructura consistente (envelope de respuesta)
-- **Paginación cursor-based** para listas grandes; page-based para listas pequeñas
-- **HATEOAS mínimo:** incluir `self` link en recursos individuales
-- **Idempotencia:** GET, PUT, DELETE son idempotentes; POST no
-
-### 1.2 Envelope de Respuesta
-
-```json
-// Éxito (colección)
-{
-  "data": [...],
-  "meta": {
-    "total": 150,
-    "page": 1,
-    "per_page": 20,
-    "pages": 8
-  },
-  "links": {
-    "self": "/api/v1/matches?page=1",
-    "next": "/api/v1/matches?page=2",
-    "prev": null
-  }
-}
-
-// Éxito (recurso individual)
-{
-  "data": { ... },
-  "meta": {}
-}
-
-// Error
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "El campo 'date_from' tiene un formato inválido",
-    "details": [
-      {
-        "field": "date_from",
-        "message": "Expected format: YYYY-MM-DD"
-      }
-    ],
-    "trace_id": "abc123xyz"
-  }
-}
-```
-
-### 1.3 Códigos de Estado HTTP Usados
-
-| Código | Cuándo usarlo |
-|--------|---------------|
-| 200 OK | GET, PUT exitoso |
-| 201 Created | POST exitoso que crea recurso |
-| 204 No Content | DELETE exitoso |
-| 400 Bad Request | Validación de input fallida |
-| 401 Unauthorized | Token ausente o inválido |
-| 403 Forbidden | Autenticado pero sin permiso |
-| 404 Not Found | Recurso no existe |
-| 409 Conflict | Violación de restricción única |
-| 422 Unprocessable Entity | Semánticamente inválido |
-| 429 Too Many Requests | Rate limit superado |
-| 500 Internal Server Error | Error no controlado |
-| 503 Service Unavailable | Mantenimiento o sobrecarga |
+| Principio | Implementación |
+|-----------|---------------|
+| REST semántico | Verbos HTTP correctos; sustantivos en plural para colecciones |
+| Versionado en URL | `/api/v1/` — permite deprecar versiones sin romper clientes |
+| Slugs como identificadores | `/teams/real-madrid` en lugar de `/teams/42` en URLs públicas |
+| Paginación consistente | Cursor-based para colecciones grandes; offset para tablas simples |
+| Errores estructurados | `{"error": {"code": "...", "message": "...", "details": {...}}}` |
+| Separación de capas | DTOs de respuesta independientes de modelos ORM y schemas internos |
+| Nulos explícitos | Campos de plan Pro devuelven `null` para usuarios Free (no se ocultan) |
 
 ---
 
 ## 2. AUTENTICACIÓN Y AUTORIZACIÓN
 
-### 2.1 Esquema JWT
+### 2.1 JWT Schema
 
 ```
-Header: Authorization: Bearer <access_token>
-
 Access Token:
-  - Algoritmo: HS256 (MVP) → RS256 (Fase 2 con rotación de llaves)
-  - Expiración: 15 minutos
-  - Payload:
-    {
-      "sub": "user_id:123",
-      "email": "user@example.com",
-      "role": "pro",
-      "iat": 1718000000,
-      "exp": 1718000900,
-      "jti": "uuid-único"
-    }
+  - Algoritmo: HS256 (MVP) → RS256 (Fase 2)
+  - TTL: 15 minutos
+  - Payload: { sub: user_id, role: "free"|"pro"|"admin", iat, exp }
+  - Enviado en: Authorization: Bearer <token>
 
 Refresh Token:
-  - Formato: opaque token (256 bits random, hash SHA-256 almacenado en DB)
-  - Expiración: 30 días
-  - Entregado en cookie httpOnly + SameSite=Strict
+  - TTL: 7 días
+  - Almacenamiento servidor: hash SHA-256 en tabla refresh_tokens
+  - Enviado en: httpOnly cookie (Secure en producción, SameSite=Lax)
+  - Rotación: cada refresh genera un nuevo token y revoca el anterior
 ```
 
 ### 2.2 Control de Acceso por Rol
 
 | Endpoint | Visitante | Free | Pro | Admin |
 |----------|-----------|------|-----|-------|
-| GET /matches (listado) | ✓ (limitado) | ✓ | ✓ | ✓ |
-| GET /matches/{id}/prediction | ✗ | ✓ (básico) | ✓ (completo) | ✓ |
-| GET /predictions/{id}/features | ✗ | ✗ | ✓ | ✓ |
-| GET /teams/{id}/advanced-stats | ✗ | ✗ | ✓ | ✓ |
-| POST /etl/sync | ✗ | ✗ | ✗ | ✓ |
-| GET /admin/* | ✗ | ✗ | ✗ | ✓ |
+| GET /matches | ✅ (limitado) | ✅ | ✅ | ✅ |
+| GET /matches/{slug} | ✅ | ✅ | ✅ | ✅ |
+| GET /matches/{slug}/prediction | ✅ (prob 1X2 solo) | ✅ (prob 1X2) | ✅ (completo) | ✅ |
+| GET /teams | ✅ | ✅ | ✅ | ✅ |
+| GET /teams/{slug} | ✅ | ✅ | ✅ | ✅ |
+| GET /teams/compare | ❌ | ✅ | ✅ | ✅ |
+| GET /players/{slug} | ✅ | ✅ | ✅ | ✅ |
+| GET /predictions/history | ❌ | ✅ | ✅ | ✅ |
+| GET /users/me | ❌ | ✅ | ✅ | ✅ |
+| PATCH /users/me | ❌ | ✅ | ✅ | ✅ |
+| POST /auth/change-password | ❌ | ✅ | ✅ | ✅ |
+| GET /admin/* | ❌ | ❌ | ❌ | ✅ |
 
 ### 2.3 Rate Limiting
 
-```
-Por IP (sin autenticar):    60 req/minuto
-Usuario Free:               200 req/minuto
-Usuario Pro:                1000 req/minuto
-API Key Pro:                2000 req/minuto
-
-Headers de respuesta:
-  X-RateLimit-Limit: 200
-  X-RateLimit-Remaining: 185
-  X-RateLimit-Reset: 1718001000
-  Retry-After: 60 (solo en 429)
-```
+| Perfil | Límite |
+|--------|--------|
+| Visitante (por IP) | 30 req/min |
+| Usuario Free (por user_id) | 60 req/min |
+| Usuario Pro (por user_id) | 200 req/min |
+| Admin | Sin límite |
 
 ---
 
-## 3. ENDPOINTS DE AUTENTICACIÓN
+## 3. ENDPOINTS — AUTENTICACIÓN
 
-### `POST /auth/register`
-
-Registro de nuevo usuario.
+### POST /api/v1/auth/register
 
 **Request:**
 ```json
 {
-  "email": "usuario@ejemplo.com",
-  "password": "MiPassword123!",
+  "email": "user@example.com",
+  "username": "juanfutbol",
+  "password": "SecurePass123!",
   "full_name": "Juan García"
 }
 ```
@@ -153,364 +84,98 @@ Registro de nuevo usuario.
 **Response 201:**
 ```json
 {
-  "data": {
-    "id": 1,
-    "email": "usuario@ejemplo.com",
-    "full_name": "Juan García",
-    "role": "free",
-    "is_verified": false,
-    "created_at": "2026-06-12T10:00:00Z"
-  }
+  "id": 42,
+  "email": "user@example.com",
+  "username": "juanfutbol",
+  "role": "free",
+  "created_at": "2026-06-12T10:00:00Z"
 }
 ```
 
-**Validaciones:**
-- `email`: formato válido, no existe previamente
-- `password`: mínimo 8 chars, 1 mayúscula, 1 número
-
 ---
 
-### `POST /auth/login`
+### POST /api/v1/auth/login
 
 **Request:**
 ```json
 {
-  "email": "usuario@ejemplo.com",
-  "password": "MiPassword123!"
+  "email": "user@example.com",
+  "password": "SecurePass123!"
 }
 ```
 
 **Response 200:**
 ```json
 {
-  "data": {
-    "access_token": "eyJhbGc...",
-    "token_type": "bearer",
-    "expires_in": 900,
-    "user": {
-      "id": 1,
-      "email": "usuario@ejemplo.com",
-      "role": "pro"
-    }
+  "access_token": "eyJhbGciOiJIUzI1NiJ9...",
+  "token_type": "bearer",
+  "expires_in": 900,
+  "user": {
+    "id": 42,
+    "email": "user@example.com",
+    "username": "juanfutbol",
+    "role": "free"
   }
 }
 ```
-`refresh_token` se entrega en cookie httpOnly.
+*El refresh token se envía en cookie httpOnly `sip_refresh` — no en el body.*
 
 ---
 
-### `POST /auth/refresh`
+### POST /api/v1/auth/refresh
 
-Usa el refresh token de la cookie para emitir nuevo access token.
-
-**Response 200:** Mismo formato que `/auth/login`
-
----
-
-### `POST /auth/logout`
-
-Revoca el refresh token actual.
-
-**Response 204:** Sin cuerpo.
-
----
-
-### `GET /auth/me`
-
-Retorna el perfil del usuario autenticado.
+Usa la cookie `sip_refresh` automáticamente. Sin body.
 
 **Response 200:**
 ```json
 {
-  "data": {
-    "id": 1,
-    "email": "usuario@ejemplo.com",
-    "full_name": "Juan García",
-    "role": "pro",
-    "subscription_status": "active",
-    "subscription_ends_at": "2026-09-12T00:00:00Z"
-  }
+  "access_token": "eyJhbGciOiJIUzI1NiJ9...",
+  "token_type": "bearer",
+  "expires_in": 900
 }
 ```
 
 ---
 
-## 4. ENDPOINTS DE LIGAS
+### POST /api/v1/auth/logout
 
-### `GET /leagues`
+Revoca el refresh token de la cookie y la limpia.
 
-Lista todas las ligas activas.
+**Response 204:** No content.
 
-**Query params:**
-- `country_code` (string): filtrar por país (ej: "ES", "CO")
-- `league_type` (string): "league", "cup", "international"
-- `page` (int, default: 1)
-- `per_page` (int, default: 20, max: 100)
+---
 
-**Response 200:**
+### POST /api/v1/auth/change-password
+
+Requiere autenticación (cualquier rol).
+
+**Request:**
 ```json
 {
-  "data": [
-    {
-      "id": 1,
-      "name": "La Liga",
-      "slug": "laliga-esp",
-      "logo_url": "https://cdn.sip.com/leagues/laliga.png",
-      "country": {
-        "code": "ES",
-        "name": "España",
-        "flag_url": "https://cdn.sip.com/flags/es.svg"
-      },
-      "current_season": "2025/26",
-      "is_active": true
-    }
-  ],
-  "meta": { "total": 6, "page": 1, "per_page": 20, "pages": 1 }
+  "current_password": "SecurePass123!",
+  "new_password": "EvenMoreSecure456!"
 }
 ```
 
----
-
-### `GET /leagues/{slug}`
-
-Detalle de una liga.
-
-**Response 200:**
-```json
-{
-  "data": {
-    "id": 1,
-    "name": "La Liga",
-    "slug": "laliga-esp",
-    "logo_url": "...",
-    "country": { "code": "ES", "name": "España" },
-    "current_season": {
-      "id": 10,
-      "label": "2025/26",
-      "start_date": "2025-08-15",
-      "end_date": "2026-05-30"
-    },
-    "teams_count": 20
-  }
-}
-```
+**Response 204:** No content. Todos los refresh tokens del usuario son revocados.
 
 ---
 
-### `GET /leagues/{slug}/standings`
+## 4. ENDPOINTS — PARTIDOS
 
-Tabla de posiciones de la liga.
+### GET /api/v1/matches
 
-**Query params:**
-- `season` (string, default: current): "2024/25"
+Parámetros de query:
 
-**Response 200:**
-```json
-{
-  "data": {
-    "league": { "name": "La Liga", "slug": "laliga-esp" },
-    "season": "2025/26",
-    "standings": [
-      {
-        "position": 1,
-        "team": {
-          "id": 5,
-          "name": "FC Barcelona",
-          "slug": "barcelona-esp",
-          "logo_url": "..."
-        },
-        "points": 72,
-        "played": 30,
-        "won": 23,
-        "drawn": 3,
-        "lost": 4,
-        "goals_for": 78,
-        "goals_against": 28,
-        "goal_difference": 50,
-        "form": "WWWDW"
-      }
-    ]
-  }
-}
-```
-
----
-
-## 5. ENDPOINTS DE EQUIPOS
-
-### `GET /teams`
-
-**Query params:**
-- `league` (string): slug de liga
-- `search` (string): búsqueda de texto en nombre
-- `page`, `per_page`
-
-**Response 200:** Lista de equipos (estructura compacta)
-
----
-
-### `GET /teams/{slug}`
-
-Perfil completo de un equipo.
-
-**Response 200:**
-```json
-{
-  "data": {
-    "id": 5,
-    "name": "FC Barcelona",
-    "short_name": "Barça",
-    "slug": "barcelona-esp",
-    "code": "BAR",
-    "logo_url": "...",
-    "country": { "code": "ES", "name": "España" },
-    "founded_year": 1899,
-    "stadium": {
-      "name": "Estadi Olímpic Lluís Companys",
-      "capacity": 55000,
-      "city": "Barcelona"
-    },
-    "current_squad_size": 25,
-    "current_league": {
-      "name": "La Liga",
-      "slug": "laliga-esp"
-    }
-  }
-}
-```
-
----
-
-### `GET /teams/{slug}/stats`
-
-Estadísticas de temporada del equipo.
-
-**Query params:**
-- `season` (string, default: current)
-- `league` (string): slug de liga (un equipo puede estar en varias competiciones)
-
-**Response 200:**
-```json
-{
-  "data": {
-    "team": { "name": "FC Barcelona", "slug": "barcelona-esp" },
-    "season": "2025/26",
-    "league": "La Liga",
-    "summary": {
-      "played": 30,
-      "won": 23,
-      "drawn": 3,
-      "lost": 4,
-      "goals_for": 78,
-      "goals_against": 28,
-      "points": 72
-    },
-    "attack": {
-      "goals_per_game": 2.6,
-      "shots_per_game": 14.2,
-      "shots_on_target_per_game": 6.1,
-      "xg_per_game": 2.1,
-      "xg_total": 63.0,
-      "xg_overperformance": 15.0
-    },
-    "defense": {
-      "goals_conceded_per_game": 0.93,
-      "xga_per_game": 0.85,
-      "clean_sheets": 14,
-      "ppda": 8.2
-    },
-    "possession": {
-      "avg_possession_pct": 61.3,
-      "passes_per_game": 612,
-      "pass_accuracy_pct": 87.4
-    },
-    "form": {
-      "last_5": "WWWDW",
-      "form_score": 87,
-      "home_record": { "won": 14, "drawn": 1, "lost": 0 },
-      "away_record": { "won": 9, "drawn": 2, "lost": 4 }
-    },
-    "ratings": {
-      "attack_rating_percentile": 95,
-      "defense_rating_percentile": 88,
-      "overall_percentile": 92
-    }
-  }
-}
-```
-*Campos `xg_*`, `ppda`, `*_percentile` requieren rol Pro.*
-
----
-
-### `GET /teams/{slug}/matches`
-
-Historial y próximos partidos del equipo.
-
-**Query params:**
-- `status` (string): "upcoming", "finished", "all"
-- `season` (string)
-- `limit` (int, default: 10)
-
----
-
-### `GET /teams/compare`
-
-Comparador head-to-head entre dos equipos.
-
-**Query params:**
-- `team1` (string, required): slug
-- `team2` (string, required): slug
-- `last_n` (int, default: 10): últimos N enfrentamientos
-
-**Response 200:**
-```json
-{
-  "data": {
-    "team1": { "name": "Real Madrid", "slug": "real-madrid-esp" },
-    "team2": { "name": "FC Barcelona", "slug": "barcelona-esp" },
-    "all_time": {
-      "team1_wins": 98,
-      "draws": 54,
-      "team2_wins": 97
-    },
-    "last_meetings": [
-      {
-        "match_id": 5432,
-        "date": "2026-04-20",
-        "home_team": "Real Madrid",
-        "away_team": "FC Barcelona",
-        "score": "2-1",
-        "competition": "La Liga"
-      }
-    ],
-    "last_n_stats": {
-      "team1_wins": 6,
-      "draws": 2,
-      "team2_wins": 2,
-      "team1_goals_avg": 1.8,
-      "team2_goals_avg": 1.4,
-      "btts_rate": 0.7,
-      "over25_rate": 0.8
-    }
-  }
-}
-```
-
----
-
-## 6. ENDPOINTS DE PARTIDOS
-
-### `GET /matches`
-
-Lista de partidos con filtros.
-
-**Query params:**
-- `date_from` (date): "2026-06-12"
-- `date_to` (date): "2026-06-19"
-- `league` (string): slug de liga
-- `team` (string): slug de equipo (local o visitante)
-- `status` (string): "SCHEDULED", "LIVE", "FT"
-- `page`, `per_page`
+| Param | Tipo | Default | Descripción |
+|-------|------|---------|-------------|
+| `league_slug` | string | - | Filtrar por liga |
+| `team_slug` | string | - | Partidos del equipo (local o visitante) |
+| `date_from` | date (YYYY-MM-DD) | hoy | Fecha inicio |
+| `date_to` | date (YYYY-MM-DD) | hoy+7 | Fecha fin |
+| `status` | string | - | SCHEDULED, FINISHED, LIVE |
+| `page` | int | 1 | Página (offset-based) |
+| `per_page` | int | 20 | Resultados por página (máx 50) |
 
 **Response 200:**
 ```json
@@ -518,151 +183,83 @@ Lista de partidos con filtros.
   "data": [
     {
       "id": 1001,
-      "match_date": "2026-06-14T19:00:00Z",
+      "slug": "real-madrid-vs-barcelona-2026-06-15",
+      "kickoff_utc": "2026-06-15T19:00:00Z",
       "status": "SCHEDULED",
-      "round": "Regular Season - 36",
+      "round": "Jornada 38",
       "league": {
         "name": "La Liga",
-        "slug": "laliga-esp",
-        "logo_url": "..."
+        "slug": "la-liga",
+        "logo_url": "https://..."
       },
       "home_team": {
         "id": 5,
-        "name": "FC Barcelona",
-        "slug": "barcelona-esp",
-        "logo_url": "..."
+        "name": "Real Madrid",
+        "slug": "real-madrid",
+        "logo_url": "https://..."
       },
       "away_team": {
-        "id": 2,
-        "name": "Real Madrid",
-        "slug": "real-madrid-esp",
-        "logo_url": "..."
+        "id": 3,
+        "name": "FC Barcelona",
+        "slug": "fc-barcelona",
+        "logo_url": "https://..."
       },
       "score": null,
       "prediction_summary": {
-        "prob_home_win": 0.4523,
-        "prob_draw": 0.2341,
-        "prob_away_win": 0.3136
+        "prob_home_win": 0.452,
+        "prob_draw": 0.271,
+        "prob_away_win": 0.277
       }
     }
   ],
-  "meta": { "total": 45, "page": 1, "per_page": 20 }
-}
-```
-
----
-
-### `GET /matches/today`
-
-Shortcut: partidos del día actual.
-
-**Response:** Igual que `/matches` filtrado por fecha de hoy.
-
----
-
-### `GET /matches/{id}`
-
-Detalle completo de un partido.
-
-**Response 200:**
-```json
-{
-  "data": {
-    "id": 1001,
-    "match_date": "2026-06-14T19:00:00Z",
-    "status": "FT",
-    "round": "Regular Season - 36",
-    "venue": {
-      "name": "Estadi Olímpic",
-      "city": "Barcelona",
-      "capacity": 55000
-    },
-    "referee": { "name": "Mateu Lahoz" },
-    "league": { "name": "La Liga", "slug": "laliga-esp" },
-    "home_team": {
-      "id": 5,
-      "name": "FC Barcelona",
-      "slug": "barcelona-esp",
-      "logo_url": "..."
-    },
-    "away_team": {
-      "id": 2,
-      "name": "Real Madrid",
-      "slug": "real-madrid-esp",
-      "logo_url": "..."
-    },
-    "score": {
-      "full_time": { "home": 3, "away": 2 },
-      "half_time": { "home": 1, "away": 1 }
-    },
-    "winner": "HOME",
-    "attendance": 54000
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total": 45,
+    "total_pages": 3
   }
 }
 ```
 
 ---
 
-### `GET /matches/{id}/stats`
-
-Estadísticas del partido (post-partido o en vivo).
+### GET /api/v1/matches/{slug}
 
 **Response 200:**
 ```json
 {
-  "data": {
-    "match_id": 1001,
-    "home_stats": {
-      "shots_total": 16,
-      "shots_on_target": 7,
-      "possession_pct": 58.3,
-      "passes_total": 623,
-      "passes_accuracy": 88.1,
-      "fouls": 9,
-      "corners": 7,
-      "yellow_cards": 2,
-      "red_cards": 0,
-      "xg": 2.34
-    },
-    "away_stats": {
-      "shots_total": 10,
-      "shots_on_target": 4,
-      "possession_pct": 41.7,
-      "passes_total": 441,
-      "passes_accuracy": 81.4,
-      "fouls": 14,
-      "corners": 3,
-      "yellow_cards": 3,
-      "red_cards": 0,
-      "xg": 1.87
-    }
-  }
-}
-```
-
----
-
-### `GET /matches/{id}/events`
-
-Eventos del partido (goles, tarjetas, sustituciones).
-
-**Response 200:**
-```json
-{
-  "data": [
+  "id": 1001,
+  "slug": "real-madrid-vs-barcelona-2026-06-15",
+  "kickoff_utc": "2026-06-15T19:00:00Z",
+  "status": "FINISHED",
+  "round": "Jornada 38",
+  "venue": {
+    "name": "Santiago Bernabéu",
+    "city": "Madrid",
+    "capacity": 81044
+  },
+  "referee_name": "Antonio López",
+  "league": { "name": "La Liga", "slug": "la-liga" },
+  "home_team": { "id": 5, "name": "Real Madrid", "slug": "real-madrid", "logo_url": "..." },
+  "away_team": { "id": 3, "name": "FC Barcelona", "slug": "fc-barcelona", "logo_url": "..." },
+  "score": {
+    "home": 2,
+    "away": 1,
+    "home_ht": 1,
+    "away_ht": 0
+  },
+  "stats": {
+    "home": { "shots_total": 14, "shots_on_goal": 6, "possession_pct": 52.3, "corners": 5 },
+    "away": { "shots_total": 10, "shots_on_goal": 4, "possession_pct": 47.7, "corners": 3 }
+  },
+  "events": [
     {
       "minute": 23,
-      "type": "goal",
-      "team": "FC Barcelona",
-      "player": "Robert Lewandowski",
-      "assist": "Lamine Yamal",
-      "detail": "Header"
-    },
-    {
-      "minute": 67,
-      "type": "yellow_card",
-      "team": "Real Madrid",
-      "player": "Jude Bellingham"
+      "extra_minute": null,
+      "event_type": "GOAL",
+      "team_slug": "real-madrid",
+      "player_name": "Vinícius Júnior",
+      "assist_player_name": "Bellingham"
     }
   ]
 }
@@ -670,351 +267,141 @@ Eventos del partido (goles, tarjetas, sustituciones).
 
 ---
 
-### `GET /matches/{id}/lineups`
+### GET /api/v1/matches/{slug}/prediction
 
-Alineaciones del partido.
-
-**Response 200:**
-```json
-{
-  "data": {
-    "home_team": {
-      "formation": "4-3-3",
-      "starting_eleven": [
-        { "position": "goalkeeper", "jersey": 1, "name": "Marc-André ter Stegen" }
-      ],
-      "substitutes": []
-    },
-    "away_team": {
-      "formation": "4-2-3-1",
-      "starting_eleven": [...],
-      "substitutes": [...]
-    }
-  }
-}
-```
-
----
-
-## 7. ENDPOINTS DE PREDICCIONES
-
-### `GET /matches/{id}/prediction`
-
-Predicción del partido para el usuario autenticado.
+Devuelve predicción con detalle diferente según el rol del usuario. No hay campo `_restricted` — los campos Pro devuelven `null` para usuarios Free.
 
 **Response 200 (usuario Free):**
 ```json
 {
-  "data": {
-    "match_id": 1001,
-    "model": "poisson_v1",
-    "generated_at": "2026-06-13T08:00:00Z",
-    "probabilities_1x2": {
-      "home_win": 0.4523,
-      "draw": 0.2341,
-      "away_win": 0.3136
-    },
-    "expected_goals": {
-      "home": 1.82,
-      "away": 1.31
-    },
-    "markets": {
-      "over_25": { "prob": 0.65 },
-      "btts": { "prob": 0.58 }
-    },
-    "_restricted": ["top_scorelines", "features", "value_bets", "confidence_score"]
-  }
+  "match_slug": "real-madrid-vs-barcelona-2026-06-15",
+  "model_version": "poisson_v1",
+  "generated_at": "2026-06-14T08:05:00Z",
+  "probabilities": {
+    "home_win": 0.452,
+    "draw": 0.271,
+    "away_win": 0.277
+  },
+  "over_under_2_5": {
+    "over": null,
+    "under": null
+  },
+  "btts": {
+    "yes": null,
+    "no": null
+  },
+  "expected_goals": null,
+  "most_likely_score": null,
+  "features": null,
+  "upgrade_prompt": "Suscríbete a Pro para ver goles esperados, BTTS y análisis completo."
 }
 ```
 
 **Response 200 (usuario Pro):**
 ```json
 {
-  "data": {
-    "match_id": 1001,
-    "model": "poisson_v1",
-    "model_version": "1.3.2",
-    "generated_at": "2026-06-13T08:00:00Z",
-    "confidence_score": 0.73,
-    "probabilities_1x2": {
-      "home_win": 0.4523,
-      "draw": 0.2341,
-      "away_win": 0.3136
-    },
-    "expected_goals": {
-      "home": 1.82,
-      "away": 1.31
-    },
-    "markets": {
-      "over_25": { "prob": 0.65, "implied_odd": 1.54 },
-      "over_35": { "prob": 0.38, "implied_odd": 2.63 },
-      "btts":    { "prob": 0.58, "implied_odd": 1.72 },
-      "home_clean_sheet": { "prob": 0.21 },
-      "away_clean_sheet": { "prob": 0.14 }
-    },
-    "top_scorelines": [
-      { "score": "1-1", "prob": 0.0921 },
-      { "score": "2-1", "prob": 0.0856 },
-      { "score": "1-0", "prob": 0.0812 },
-      { "score": "2-0", "prob": 0.0743 },
-      { "score": "2-2", "prob": 0.0612 }
-    ],
-    "value_bets": [
-      {
-        "market": "over_25",
-        "our_prob": 0.65,
-        "market_odds_avg": 1.74,
-        "implied_prob": 0.575,
-        "value": 0.075,
-        "recommendation": "VALUE"
-      }
-    ],
-    "features": {
-      "home_attack_strength": 1.42,
-      "away_attack_strength": 0.98,
-      "home_defense_strength": 0.81,
-      "away_defense_strength": 1.12,
-      "home_form_score": 87,
-      "away_form_score": 71,
-      "h2h_home_advantage": 0.12,
-      "home_goals_avg_5": 2.2,
-      "away_goals_avg_5": 1.4,
-      "home_xg_avg_5": 1.95,
-      "away_xg_avg_5": 1.28,
-      "days_since_last_match_home": 7,
-      "days_since_last_match_away": 4
-    }
-  }
+  "match_slug": "real-madrid-vs-barcelona-2026-06-15",
+  "model_version": "poisson_v1",
+  "generated_at": "2026-06-14T08:05:00Z",
+  "probabilities": {
+    "home_win": 0.452,
+    "draw": 0.271,
+    "away_win": 0.277
+  },
+  "over_under_2_5": {
+    "over": 0.613,
+    "under": 0.387
+  },
+  "btts": {
+    "yes": 0.558,
+    "no": 0.442
+  },
+  "expected_goals": {
+    "home": 1.82,
+    "away": 1.41
+  },
+  "most_likely_score": "2-1",
+  "features": {
+    "home_avg_goals_scored": 2.1,
+    "home_avg_goals_conceded": 0.9,
+    "away_avg_goals_scored": 1.8,
+    "away_avg_goals_conceded": 1.1,
+    "h2h_home_win_rate": 0.45,
+    "home_form_last5": "WWDWW",
+    "away_form_last5": "WDWLW"
+  },
+  "upgrade_prompt": null
 }
 ```
 
 ---
 
-### `GET /predictions/history`
+## 5. ENDPOINTS — EQUIPOS
 
-Historial de predicciones resueltas con accuracy.
+> **Nota de implementación:** `GET /teams/compare` DEBE declararse ANTES de `GET /teams/{slug}` en el router de FastAPI, ya que de lo contrario "compare" es interpretado como un valor de slug.
 
-**Query params:**
-- `league` (string): slug de liga
-- `model` (string, default: "poisson_v1")
-- `date_from`, `date_to`
-- `page`, `per_page`
+```python
+# app/api/v1/teams.py — orden obligatorio
+router.add_api_route("/compare", compare_teams, methods=["GET"])
+router.add_api_route("/{slug}", get_team, methods=["GET"])
+```
+
+### GET /api/v1/teams
+
+Parámetros: `league_slug`, `search` (texto — usa pg_trgm), `page`, `per_page`.
 
 **Response 200:**
 ```json
 {
   "data": [
     {
-      "match_id": 990,
-      "match_date": "2026-06-07T18:00:00Z",
-      "home_team": "Atlético Madrid",
-      "away_team": "Sevilla",
-      "predicted_winner": "HOME",
-      "actual_winner": "HOME",
-      "correct": true,
-      "prob_home_win": 0.52,
-      "prob_draw": 0.27,
-      "prob_away_win": 0.21,
-      "brier_score": 0.186
+      "id": 5,
+      "name": "Real Madrid",
+      "slug": "real-madrid",
+      "short_name": "Real Madrid",
+      "logo_url": "https://...",
+      "country": { "name": "Spain", "code": "ES" },
+      "current_league": "La Liga"
     }
   ],
-  "meta": {
-    "total": 120,
-    "accuracy_1x2": 0.5417,
-    "avg_brier_score": 0.2234
-  }
+  "meta": { "page": 1, "per_page": 20, "total": 80 }
 }
 ```
 
 ---
 
-### `GET /predictions/performance`
-
-Métricas de rendimiento del modelo.
-
-**Query params:**
-- `league` (string)
-- `season` (string)
-- `model` (string)
+### GET /api/v1/teams/{slug}
 
 **Response 200:**
 ```json
 {
-  "data": {
-    "model": "poisson_v1",
-    "version": "1.3.2",
-    "period": "2025/26",
+  "id": 5,
+  "name": "Real Madrid",
+  "slug": "real-madrid",
+  "logo_url": "https://...",
+  "founded_year": 1902,
+  "venue": {
+    "name": "Santiago Bernabéu",
+    "city": "Madrid",
+    "capacity": 81044
+  },
+  "current_season_stats": {
     "league": "La Liga",
-    "total_predictions": 250,
-    "metrics": {
-      "accuracy_1x2": 0.5240,
-      "accuracy_home": 0.6122,
-      "accuracy_draw": 0.3021,
-      "accuracy_away": 0.5410,
-      "avg_brier_score": 0.2201,
-      "avg_log_loss": 0.9841,
-      "roi_simulation": 0.034
-    },
-    "confusion_matrix": {
-      "HOME_predicted_HOME": 78,
-      "HOME_predicted_DRAW": 12,
-      "HOME_predicted_AWAY": 8,
-      "DRAW_predicted_HOME": 31,
-      "DRAW_predicted_DRAW": 21,
-      "DRAW_predicted_AWAY": 15,
-      "AWAY_predicted_HOME": 22,
-      "AWAY_predicted_DRAW": 18,
-      "AWAY_predicted_AWAY": 45
-    }
-  }
-}
-```
-
----
-
-## 8. ENDPOINTS DE JUGADORES
-
-### `GET /players`
-
-**Query params:**
-- `team` (string): slug de equipo
-- `position` (string): "goalkeeper", "defender", "midfielder", "forward"
-- `search` (string): búsqueda de texto
-- `page`, `per_page`
-
----
-
-### `GET /players/{slug}`
-
-Perfil de jugador.
-
-**Response 200:**
-```json
-{
-  "data": {
-    "id": 501,
-    "name": "Robert Lewandowski",
-    "slug": "lewandowski-pol",
-    "date_of_birth": "1988-08-21",
-    "age": 37,
-    "nationality": { "code": "PL", "name": "Polonia" },
-    "height_cm": 185,
-    "weight_kg": 81,
-    "photo_url": "...",
-    "current_team": {
-      "name": "FC Barcelona",
-      "slug": "barcelona-esp",
-      "position": "forward",
-      "jersey_number": 9
-    }
-  }
-}
-```
-
----
-
-### `GET /players/{slug}/stats`
-
-Estadísticas de temporada del jugador.
-
-**Query params:**
-- `season` (string, default: current)
-- `competition` (string): slug de liga o copa
-
-**Response 200:**
-```json
-{
-  "data": {
-    "player": { "name": "Robert Lewandowski" },
-    "season": "2025/26",
-    "team": "FC Barcelona",
-    "competition": "La Liga",
-    "appearances": 28,
-    "starts": 26,
-    "minutes": 2340,
-    "goals": 22,
-    "assists": 7,
-    "yellow_cards": 3,
-    "red_cards": 0,
-    "shots_total": 98,
-    "shots_on_target": 54,
-    "shot_accuracy_pct": 55.1,
-    "passes_accuracy_pct": 77.3,
-    "dribbles_completed": 28,
-    "avg_rating": 7.42,
-    "advanced": {
-      "xg": 19.3,
-      "xa": 5.8,
-      "npxg": 18.1,
-      "xg_overperformance": 2.7,
-      "goals_per_90": 0.85,
-      "xa_per_90": 0.22
-    }
-  }
-}
-```
-*Campos `advanced` requieren rol Pro.*
-
----
-
-## 9. ENDPOINTS DE ODDS
-
-### `GET /matches/{id}/odds`
-
-Odds actuales de bookmakers para el partido.
-
-**Requiere:** rol Free o superior.
-
-**Response 200:**
-```json
-{
-  "data": {
-    "match_id": 1001,
-    "last_updated": "2026-06-13T12:00:00Z",
-    "markets": {
-      "1x2": {
-        "avg": { "home": 2.10, "draw": 3.40, "away": 3.60 },
-        "best": { "home": 2.20, "draw": 3.60, "away": 3.80 },
-        "bookmakers": [
-          { "name": "Bet365", "home": 2.10, "draw": 3.30, "away": 3.50 },
-          { "name": "Betfair", "home": 2.20, "draw": 3.60, "away": 3.80 }
-        ]
-      },
-      "over_under_25": {
-        "line": 2.5,
-        "avg_over": 1.78,
-        "avg_under": 2.10
-      }
-    }
-  }
-}
-```
-
----
-
-## 10. ENDPOINTS DE ADMINISTRACIÓN
-
-### `GET /admin/etl/jobs`
-
-Lista de jobs ETL recientes.
-
-**Requiere:** rol Admin.
-
-**Response 200:**
-```json
-{
-  "data": [
+    "rank": 1,
+    "played": 37,
+    "points": 90,
+    "goals_for": 85,
+    "goals_against": 26,
+    "form": "WWWDW"
+  },
+  "recent_matches": [
     {
-      "id": 890,
-      "job_name": "sync_fixtures",
-      "source": "api_football",
-      "league": "La Liga",
-      "status": "SUCCESS",
-      "records_fetched": 10,
-      "records_created": 2,
-      "records_updated": 8,
-      "started_at": "2026-06-12T06:00:00Z",
-      "duration_ms": 1234
+      "slug": "real-madrid-vs-barcelona-2026-06-15",
+      "kickoff_utc": "2026-06-15T19:00:00Z",
+      "opponent": "FC Barcelona",
+      "home_away": "home",
+      "score": "2-1",
+      "result": "W"
     }
   ]
 }
@@ -1022,74 +409,33 @@ Lista de jobs ETL recientes.
 
 ---
 
-### `POST /admin/etl/trigger`
+### GET /api/v1/teams/compare
 
-Dispara un job ETL manualmente.
+Requiere autenticación (Free o superior).
 
-**Request:**
-```json
-{
-  "job_name": "sync_fixtures",
-  "league_slug": "laliga-esp",
-  "season": "2025/26"
-}
-```
-
-**Response 202:**
-```json
-{
-  "data": {
-    "job_id": 891,
-    "status": "PENDING",
-    "message": "Job encolado exitosamente"
-  }
-}
-```
-
----
-
-### `POST /admin/predictions/generate`
-
-Fuerza el recálculo de predicciones para un partido.
-
-**Request:**
-```json
-{
-  "match_id": 1001,
-  "model": "poisson_v1"
-}
-```
-
-**Response 202:** Confirmación de encolamiento.
-
----
-
-### `GET /admin/users`
-
-Lista de usuarios con filtros.
-
-**Query params:**
-- `role` (string): "free", "pro"
-- `search` (string): email o nombre
-- `page`, `per_page`
-
----
-
-## 11. ENDPOINTS DE USUARIO
-
-### `GET /users/me/favorites`
-
-Lista de favoritos del usuario.
+Parámetros: `team_a` (slug), `team_b` (slug), `league_slug` (opcional, filtro H2H).
 
 **Response 200:**
 ```json
 {
-  "data": {
-    "teams": [
-      { "id": 5, "name": "FC Barcelona", "slug": "barcelona-esp" }
-    ],
-    "leagues": [
-      { "id": 1, "name": "La Liga", "slug": "laliga-esp" }
+  "team_a": { "name": "Real Madrid", "slug": "real-madrid", "logo_url": "..." },
+  "team_b": { "name": "FC Barcelona", "slug": "fc-barcelona", "logo_url": "..." },
+  "current_season": {
+    "team_a": { "rank": 1, "points": 90, "goals_for": 85, "form": "WWWDW" },
+    "team_b": { "rank": 2, "points": 85, "goals_for": 78, "form": "WDWWW" }
+  },
+  "head_to_head": {
+    "total_matches": 12,
+    "team_a_wins": 5,
+    "draws": 3,
+    "team_b_wins": 4,
+    "last_matches": [
+      {
+        "slug": "real-madrid-vs-barcelona-2026-06-15",
+        "date": "2026-06-15",
+        "score": "2-1",
+        "winner": "team_a"
+      }
     ]
   }
 }
@@ -1097,117 +443,376 @@ Lista de favoritos del usuario.
 
 ---
 
-### `POST /users/me/favorites`
+## 6. ENDPOINTS — JUGADORES
 
-Agrega un favorito.
+### GET /api/v1/players
 
-**Request:**
+Parámetros: `team_slug`, `league_slug`, `position`, `search`, `page`, `per_page`.
+
+### GET /api/v1/players/{slug}
+
+**Response 200:**
 ```json
 {
-  "entity_type": "team",
-  "entity_id": 5
-}
-```
-
-**Response 201:** Confirmación.
-
----
-
-### `DELETE /users/me/favorites/{entity_type}/{entity_id}`
-
-Elimina un favorito.
-
-**Response 204:** Sin cuerpo.
-
----
-
-## 12. SCHEMAS PYDANTIC CLAVE
-
-### MatchResponse
-```python
-class MatchResponse(BaseModel):
-    id: int
-    match_date: datetime
-    status: MatchStatus
-    round: str | None
-    league: LeagueCompact
-    home_team: TeamCompact
-    away_team: TeamCompact
-    score: ScoreDetail | None
-    winner: str | None
-    prediction_summary: PredictionSummary | None
-
-    model_config = ConfigDict(from_attributes=True)
-```
-
-### PredictionResponse (estratificada por rol)
-```python
-class PredictionBasic(BaseModel):
-    match_id: int
-    model: str
-    generated_at: datetime
-    probabilities_1x2: Probabilities1X2
-    expected_goals: ExpectedGoals
-    markets: MarketsBasic
-
-class PredictionPro(PredictionBasic):
-    confidence_score: float
-    top_scorelines: list[ScoretlineProb]
-    value_bets: list[ValueBet]
-    features: dict[str, float]
-```
-
----
-
-## 13. WEBSOCKETS (FASE 2)
-
-### `WS /ws/matches/{id}/live`
-
-Actualizaciones en tiempo real para partidos en vivo.
-
-**Mensaje del servidor:**
-```json
-{
-  "type": "SCORE_UPDATE",
-  "data": {
-    "match_id": 1001,
-    "minute": 67,
-    "home_goals": 2,
-    "away_goals": 1,
-    "event": {
-      "type": "goal",
-      "player": "Lamine Yamal",
-      "minute": 67
-    }
+  "id": 200,
+  "name": "Vinícius Júnior",
+  "slug": "vinicius-junior",
+  "photo_url": "https://...",
+  "date_of_birth": "2000-07-12",
+  "nationality": "Brazil",
+  "position": "Attacker",
+  "height_cm": 176,
+  "current_team": {
+    "name": "Real Madrid",
+    "slug": "real-madrid"
+  },
+  "current_season_stats": {
+    "league": "La Liga",
+    "appearances": 33,
+    "goals": 24,
+    "assists": 9,
+    "minutes_played": 2847,
+    "yellow_cards": 3,
+    "red_cards": 0
   }
 }
 ```
 
-**Tipos de mensaje:**
-- `SCORE_UPDATE` — cambio de marcador
-- `MATCH_STATUS` — cambio de estado (HT, FT)
-- `STATS_UPDATE` — actualización de estadísticas de partido
-- `PREDICTION_UPDATE` — predicción recalculada por evento de partido
+---
+
+## 7. ENDPOINTS — LIGAS
+
+### GET /api/v1/leagues
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "La Liga",
+      "slug": "la-liga",
+      "country": { "name": "Spain", "code": "ES" },
+      "logo_url": "https://...",
+      "current_season": "2025/26",
+      "is_active": true
+    }
+  ]
+}
+```
+
+### GET /api/v1/leagues/{slug}/standings
+
+**Response 200:**
+```json
+{
+  "league": { "name": "La Liga", "slug": "la-liga" },
+  "season": "2025/26",
+  "round": "Jornada 37",
+  "table": [
+    {
+      "rank": 1,
+      "team": { "name": "Real Madrid", "slug": "real-madrid", "logo_url": "..." },
+      "played": 37,
+      "won": 29,
+      "drawn": 3,
+      "lost": 5,
+      "goals_for": 85,
+      "goals_against": 26,
+      "goal_diff": 59,
+      "points": 90,
+      "form": "WWWDW"
+    }
+  ]
+}
+```
+
+### GET /api/v1/leagues/{slug}/matches
+
+Parámetros: `season` (year, default current), `round`, `status`, `page`, `per_page`.
 
 ---
 
-## 14. VERSIONADO Y DEPRECACIÓN
+## 8. ENDPOINTS — PREDICCIONES
+
+### GET /api/v1/predictions/history
+
+Historial de resolución de predicciones del modelo. Separación clara entre estadísticas de negocio y metadatos de paginación.
+
+Parámetros: `league_slug`, `model_version`, `from_date`, `to_date`, `page`, `per_page`.
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "match_slug": "atletico-madrid-vs-sevilla-2026-06-10",
+      "match_date": "2026-06-10",
+      "prediction": { "home_win": 0.51, "draw": 0.28, "away_win": 0.21 },
+      "actual_outcome": "HOME",
+      "correct": true,
+      "brier_score": 0.194
+    }
+  ],
+  "stats": {
+    "total_predictions": 150,
+    "correct_predictions": 73,
+    "accuracy_1x2": 0.487,
+    "avg_brier_score": 0.221,
+    "model_version": "poisson_v1"
+  },
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total": 150,
+    "total_pages": 8
+  }
+}
+```
+
+---
+
+## 9. ENDPOINTS — USUARIOS
+
+### GET /api/v1/users/me
+
+**Response 200:**
+```json
+{
+  "id": 42,
+  "email": "user@example.com",
+  "username": "juanfutbol",
+  "full_name": "Juan García",
+  "avatar_url": null,
+  "role": "free",
+  "is_verified": true,
+  "created_at": "2026-01-15T10:00:00Z",
+  "favorites": {
+    "teams": [
+      { "name": "Real Madrid", "slug": "real-madrid", "logo_url": "..." }
+    ],
+    "leagues": [
+      { "name": "La Liga", "slug": "la-liga" }
+    ]
+  }
+}
+```
+
+---
+
+### PATCH /api/v1/users/me
+
+Actualización parcial del perfil. Solo los campos enviados son actualizados.
+
+**Request:**
+```json
+{
+  "full_name": "Juan García López",
+  "avatar_url": "https://..."
+}
+```
+
+**Response 200:** Objeto usuario actualizado (mismo schema que GET /users/me).
+
+---
+
+### POST /api/v1/users/me/favorites/teams
+
+**Request:**
+```json
+{ "team_slug": "real-madrid" }
+```
+
+**Response 201:**
+```json
+{ "team": { "name": "Real Madrid", "slug": "real-madrid", "logo_url": "..." } }
+```
+
+---
+
+### DELETE /api/v1/users/me/favorites/teams/{slug}
+
+**Response 204:** No content.
+
+---
+
+### POST /api/v1/users/me/favorites/leagues
+
+**Request:**
+```json
+{ "league_slug": "la-liga" }
+```
+
+**Response 201:**
+```json
+{ "league": { "name": "La Liga", "slug": "la-liga" } }
+```
+
+---
+
+### DELETE /api/v1/users/me/favorites/leagues/{slug}
+
+**Response 204:** No content.
+
+---
+
+## 10. ENDPOINTS — ADMIN
+
+Todos requieren rol `admin`.
+
+### GET /api/v1/admin/etl/jobs
+
+Parámetros: `job_name`, `status`, `page`, `per_page`.
+
+**Response 200:**
+```json
+{
+  "data": [
+    {
+      "id": 501,
+      "job_name": "sync_results",
+      "source": "api_football",
+      "league": "La Liga",
+      "status": "SUCCESS",
+      "started_at": "2026-06-12T10:00:00Z",
+      "finished_at": "2026-06-12T10:00:23Z",
+      "duration_ms": 23456.789,
+      "records_processed": 45,
+      "records_failed": 0,
+      "error_message": null
+    }
+  ],
+  "meta": { "page": 1, "per_page": 20, "total": 280 }
+}
+```
+
+### POST /api/v1/admin/etl/jobs/trigger
+
+Ejecución manual de un job.
+
+**Request:**
+```json
+{
+  "job_name": "sync_fixtures",
+  "league_slug": "la-liga"
+}
+```
+
+**Response 202:**
+```json
+{
+  "message": "Job sync_fixtures enqueued for la-liga",
+  "job_log_id": 502
+}
+```
+
+---
+
+## 11. SCHEMAS PYDANTIC (REFERENCIA)
+
+```python
+# app/schemas/prediction.py
+
+from pydantic import BaseModel
+from datetime import datetime
+
+class PredictionProbabilities(BaseModel):
+    home_win: float
+    draw: float
+    away_win: float
+
+class OverUnder(BaseModel):
+    over: float | None
+    under: float | None
+
+class BTTS(BaseModel):
+    yes: float | None
+    no: float | None
+
+class PredictionFeatures(BaseModel):
+    home_avg_goals_scored: float | None
+    home_avg_goals_conceded: float | None
+    away_avg_goals_scored: float | None
+    away_avg_goals_conceded: float | None
+    h2h_home_win_rate: float | None
+    home_form_last5: str | None
+    away_form_last5: str | None
+
+class PredictionResponse(BaseModel):
+    match_slug: str
+    model_version: str
+    generated_at: datetime
+    probabilities: PredictionProbabilities
+    over_under_2_5: OverUnder
+    btts: BTTS
+    expected_goals: dict[str, float] | None
+    most_likely_score: str | None
+    features: PredictionFeatures | None    # None para usuarios Free
+    upgrade_prompt: str | None             # None para usuarios Pro/Admin
+
+    model_config = {"from_attributes": True}
+```
+
+---
+
+## 12. MANEJO DE ERRORES
+
+### Formato de error estándar
+
+```json
+{
+  "error": {
+    "code": "RESOURCE_NOT_FOUND",
+    "message": "Match 'xxx-yyy-zzz' not found",
+    "details": {}
+  }
+}
+```
+
+### Códigos de error internos
+
+| HTTP | Code | Situación |
+|------|------|-----------|
+| 400 | VALIDATION_ERROR | Input inválido (Pydantic) |
+| 401 | UNAUTHORIZED | Token ausente o expirado |
+| 401 | INVALID_CREDENTIALS | Email/password incorrectos |
+| 403 | FORBIDDEN | Rol insuficiente para el recurso |
+| 404 | RESOURCE_NOT_FOUND | Recurso no existe |
+| 409 | DUPLICATE_RESOURCE | Email o username ya registrado |
+| 422 | UNPROCESSABLE_ENTITY | Datos bien formados pero inválidos lógicamente |
+| 429 | RATE_LIMIT_EXCEEDED | Demasiadas requests |
+| 500 | INTERNAL_ERROR | Error no esperado (registrado en Sentry) |
+
+---
+
+## 13. VERSIONADO Y DEPRECACIÓN
 
 ```
-Política de versionado:
-  - Versión en URL: /api/v1/, /api/v2/
-  - Una versión mayor nueva requiere 6 meses de soporte de la versión anterior
-  - Breaking changes NUNCA en la misma versión mayor
-  - Deprecation notice: header "Deprecation: true" + "Sunset: <fecha>"
-  - Changelog publicado en /api/changelog
+Versión actual:  /api/v1/
+Próxima versión: /api/v2/  (cuando haya cambios breaking)
 
-Breaking changes (requieren nueva versión mayor):
-  - Remover campo del response
-  - Cambiar tipo de dato de campo existente
-  - Cambiar semántica de parámetro existente
-
-Non-breaking changes (pueden ir en misma versión):
-  - Agregar campos opcionales al response
-  - Agregar nuevos endpoints
-  - Agregar parámetros opcionales de query
+Política:
+  - Una versión se depreca con mínimo 3 meses de aviso
+  - Se agrega header: Deprecation: true, Sunset: <fecha>
+  - Se documenta en CHANGELOG.md
+  - Las versiones nuevas son aditivas — nuevos campos, nuevos endpoints
+  - Los cambios breaking requieren nueva versión mayor
 ```
+
+---
+
+## 14. OPENAPI Y DOCUMENTACIÓN
+
+FastAPI genera automáticamente OpenAPI 3.0. En local:
+
+```
+http://localhost:8000/docs      → Swagger UI interactivo
+http://localhost:8000/redoc     → ReDoc (documentación limpia)
+http://localhost:8000/openapi.json → Schema JSON exportable
+```
+
+Todos los endpoints incluyen:
+- Descripción del endpoint
+- Tags por módulo (auth, matches, teams, players, leagues, predictions, users, admin)
+- Ejemplos de request y response
+- Códigos de error documentados
