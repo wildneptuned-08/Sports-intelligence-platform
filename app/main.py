@@ -27,8 +27,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.sentry_dsn:
         sentry_sdk.init(
             dsn=settings.sentry_dsn,
-            environment=settings.environment,
-            traces_sample_rate=0.1,
+            environment=settings.environment.value,
+            traces_sample_rate=0.1 if settings.is_production else 1.0,
         )
         logger.info("Sentry initialized")
 
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info(
         "Application startup complete",
         extra={
-            "environment": settings.environment,
+            "environment": settings.environment.value,
             "scheduler_jobs": len(scheduler.get_jobs()),
         },
     )
@@ -58,14 +58,13 @@ def create_app() -> FastAPI:
             "analytics de equipos y jugadores, y datos históricos de ligas."
         ),
         version="0.1.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if settings.show_docs else None,
+        redoc_url="/redoc" if settings.show_docs else None,
+        openapi_url="/openapi.json" if settings.show_docs else None,
         default_response_class=ORJSONResponse,
         lifespan=lifespan,
     )
 
-    # CORS — development: permissive; production: locked to allowed_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
@@ -74,10 +73,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Health check at root (not under /api/v1/)
     app.include_router(health_router)
-
-    # All REST API routes under /api/v1/
     app.include_router(api_router, prefix=settings.api_prefix)
 
     add_exception_handlers(app)

@@ -14,10 +14,10 @@ settings = get_settings()
 
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.environment == "development",
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,  # reconnect on stale connections
+    echo=settings.is_development,
+    pool_size=5 if settings.is_development else 10,
+    max_overflow=10 if settings.is_development else 20,
+    pool_pre_ping=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -30,7 +30,6 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI dependency that yields a database session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session

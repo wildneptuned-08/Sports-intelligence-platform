@@ -19,6 +19,7 @@ class TestHealthEndpoint:
         assert "db" in body
         assert "scheduler" in body
         assert "version" in body
+        assert "environment" in body
 
     async def test_health_db_ok(self, client: AsyncClient) -> None:
         response = await client.get("/health")
