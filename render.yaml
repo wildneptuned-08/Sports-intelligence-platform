@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: sip-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerTarget: production
+    healthCheckPath: /health/ready
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: API_FOOTBALL_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
